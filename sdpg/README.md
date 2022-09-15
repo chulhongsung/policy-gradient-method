@@ -1,4 +1,2 @@
 # SDPG
-```
-Sample-based Distributional Policy Gradient
-```
+> Sample-based Distributional Policy Gradient
