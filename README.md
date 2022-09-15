@@ -1,2 +1,2 @@
 # policy-gradient-method
-DRL based on policy gradient method
+Distributional reinforcement learning based on policy gradient method
