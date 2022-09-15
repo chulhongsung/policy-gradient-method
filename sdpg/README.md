@@ -1,2 +1,4 @@
-# policy-gradient-method
-DRL based on policy gradient method
+# SDPG
+```
+Sample-based Distributional Policy Gradient
+```
