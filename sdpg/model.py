@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 from tensorflow import keras as K
 import matplotlib.pyplot as plt
@@ -54,34 +53,6 @@ class ReplayBuffer(object):
         self.buffer = deque()
         self.count = 0
 
-class Critic(K.models.Model):
-    """
-    Critic network which returns parameters of the linear isotonic regression spline 
-
-    Args:
-        hidden_dims (list): A list consists of hidden layers output dimensions 
-        param_dims (int): An integer value denotes the number of spline parameters such as knots(delta), slope(beta), ...
-        min_reward (int): min_reward <= reward <= max_reward, if min_reward is not None, then parameter gamma = min_reward   
-        inputs (tensor): tf.concat([temp_state, temp_action], axis=-1) 
-    """
-    
-    def __init__(self):
-        super(Critic, self).__init__()   
-        self.h_s = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [400, 300]] 
-        self.h_a = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [400, 300]] 
-        self.h_n = K.layers.Dense(300, activation='relu',kernel_initializer=K.initializers.GlorotUniform())
-        self.value_map = K.layers.Dense(1, kernel_initializer=K.initializers.GlorotUniform())                     
-        
-    @tf.function
-    def call(self, input):
-        state, action, noise = input
-        h_state = self.h_s[1](self.h_s[0](state))
-        h_action = self.h_a[1](self.h_a[0](action))
-        h_noise = self.h_n(noise)
-        
-        value = self.value_map(tf.expand_dims(h_state, 1) + tf.expand_dims(h_action, 1) + h_noise)        
-        return value
-
 class Actor(K.models.Model):
 
     def __init__(self, action_dim, action_bound):
@@ -89,8 +60,8 @@ class Actor(K.models.Model):
 
         self.action_bound = action_bound
 
-        self.h1 = K.layers.Dense(400, activation='relu',kernel_initializer=K.initializers.GlorotUniform())
-        self.h2 = K.layers.Dense(300, activation='relu', kernel_initializer=K.initializers.GlorotUniform())
+        self.h1 = K.layers.Dense(args.h1, activation='relu',kernel_initializer=K.initializers.GlorotUniform())
+        self.h2 = K.layers.Dense(args.h2, activation='relu', kernel_initializer=K.initializers.GlorotUniform())
         self.action = K.layers.Dense(action_dim, activation='tanh', kernel_initializer=K.initializers.GlorotUniform())
 
     @tf.function 
@@ -116,9 +87,9 @@ class Critic(K.models.Model):
     
     def __init__(self):
         super(Critic, self).__init__()   
-        self.h_s = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [400, 300]] 
-        self.h_a = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [400, 300]] 
-        self.h_n = K.layers.Dense(300, activation='relu',kernel_initializer=K.initializers.GlorotUniform())
+        self.h_s = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [args.h1, args.h2]] 
+        self.h_a = [K.layers.Dense(dim, activation='relu',kernel_initializer=K.initializers.GlorotUniform()) for dim in [args.h1, args.h2]] 
+        self.h_n = K.layers.Dense(args.h2, activation='relu',kernel_initializer=K.initializers.GlorotUniform())
         self.value_map = K.layers.Dense(1, kernel_initializer=K.initializers.GlorotUniform())                     
         
     @tf.function
@@ -131,11 +102,12 @@ class Critic(K.models.Model):
         value = self.value_map(tf.expand_dims(h_state, 1) + tf.expand_dims(h_action, 1) + h_noise)        
         return value
 
+#%%
 class QuantileHuber(K.losses.Loss):
-    def __init__(self, num_atoms=51, delta=1):
+    def __init__(self, num_atoms=51, d=1.0):
         super(QuantileHuber, self).__init__()
         self.num_atoms = num_atoms # num class
-        self.delta = delta # image row * col
+        self.d = d # image row * col
 
         min_tau = 1/(2*self.num_atoms)
         max_tau = (2*self.num_atoms+1)/(2*self.num_atoms)
@@ -144,24 +116,23 @@ class QuantileHuber(K.losses.Loss):
         
     def call(self, pred, target):
         error = pred - tf.transpose(target, perm=[0, 2, 1])
-        tmp_loss = tf.where(tf.less(tf.abs(error), 1.0), 0.5*tf.math.square(error), tf.abs(error) - 0.5 )
+        tmp_loss = tf.where(tf.less(tf.abs(error), 1.0), 0.5*tf.math.square(error), self.d * (tf.abs(error) - 0.5 * self.d))
         loss = tf.where(tf.less(error, 0.0), self.inv_tau * tmp_loss, self.tau * tmp_loss)
         
-        return tf.math.reduce_mean(loss)
+        return tf.reduce_mean(tf.reduce_sum(tf.reduce_mean(loss, axis = 2), axis = 1))
 
 class SDPGagent(object):
     
-    def __init__(self, env, seed):
-        self.GAMMA = 0.9
-        self.BATCH_SIZE = 256
-        self.BUFFER_SIZE = 1000000
-        self.ACTOR_LEARNING_RATE = 0.00003
-        self.CRITIC_LEARNING_RATE = 0.00003
-        self.SAMPLE_SIZE = 51
-        self.DELTA = 0.3
-        self.DELTA_DECAYING_RATE = 0.9999
-        self.TAU = 0.01
-        self.SEED = seed
+    def __init__(self, env, gamma, bs, bfs, lr1, lr2, delta, ddr, ns, tau):
+        self.GAMMA = gamma
+        self.BATCH_SIZE = bs
+        self.BUFFER_SIZE = bfs
+        self.ACTOR_LEARNING_RATE = lr1
+        self.CRITIC_LEARNING_RATE = lr2
+        self.SAMPLE_SIZE = ns
+        self.DELTA = delta
+        self.DELTA_DECAYING_RATE = ddr
+        self.TAU = tau
         
         self.env = env
 
@@ -169,8 +140,8 @@ class SDPGagent(object):
         self.action_dim = env.action_space.shape[0]
         self.action_bound = env.action_space.high[0]
         
-        self.env.seed(self.SEED)
-        tf.random.set_seed(self.SEED)
+        # self.env.seed(self.SEED)
+        # tf.random.set_seed(self.SEED)
         
         self.actor = Actor(self.action_dim, self.action_bound)
         self.target_actor = Actor(self.action_dim, self.action_bound)
@@ -179,12 +150,12 @@ class SDPGagent(object):
         self.target_critic = Critic()
 
         self.actor.build(input_shape=(None, self.state_dim))
-                
-        actor_lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        self.target_actor.build(input_shape=(None, self.state_dim))                
+        actor_lr_schedule = K.optimizers.schedules.ExponentialDecay(
                 self.ACTOR_LEARNING_RATE, 10000, 0.999, staircase=False, name=None
             )
 
-        critic_lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        critic_lr_schedule = K.optimizers.schedules.ExponentialDecay(
                 self.CRITIC_LEARNING_RATE, 10000, 0.999, staircase=False, name=None
             )
 
@@ -196,6 +167,7 @@ class SDPGagent(object):
         self.qh_loss = QuantileHuber()
         
         self.save_epi_reward = []
+        self.save_train_step = []
     
     def gaussian_noise(self, mu=0.0, sigma=1):
         return tf.random.normal([self.action_dim], mu, sigma, tf.float32)
@@ -204,6 +176,12 @@ class SDPGagent(object):
         return tf.random.normal([self.BATCH_SIZE, self.SAMPLE_SIZE, 1], mu, sigma, tf.float32)
 
     def update_target_network(self, TAU):
+        theta = self.actor.get_weights()
+        target_theta = self.target_actor.get_weights()
+        for i in range(len(theta)):
+            target_theta[i] = TAU * theta[i] + (1 - TAU) * target_theta[i]
+        self.target_actor.set_weights(target_theta)
+
         phi = self.critic.get_weights()
         target_phi = self.target_critic.get_weights()
         for i in range(len(phi)):
@@ -216,7 +194,7 @@ class SDPGagent(object):
         with tf.GradientTape() as tape:
             noise = self.sample_noise()
             z = self.critic([states, self.actor(states), noise])
-            mean_value = tf.math.reduce_mean(z) 
+            mean_value = - tf.math.reduce_mean(z) 
     
         grad_theta = tape.gradient(mean_value, self.actor.weights)
         self.optimizer_theta.apply_gradients(zip(grad_theta, self.actor.weights))
@@ -227,7 +205,7 @@ class SDPGagent(object):
             noise1 = self.sample_noise()
             noise2 = self.sample_noise()            
             z = self.critic([states, actions, noise1])
-            next_action = self.actor(tf.convert_to_tensor(next_states, dtype=tf.float32))
+            next_action = self.target_actor(tf.convert_to_tensor(next_states, dtype=tf.float32))
             z_tilde = self.target_critic([tf.convert_to_tensor(next_states, dtype=tf.float32), next_action, noise2])
             z_tilde = tf.sort(z_tilde, axis=1)
             rewards_ = tf.reshape(rewards, [self.BATCH_SIZE, 1, 1])
@@ -239,65 +217,86 @@ class SDPGagent(object):
         grad_phi = tape.gradient(loss, self.critic.weights)
         self.optimizer_phi.apply_gradients(zip(grad_phi, self.critic.weights))
     
-    def load_weights(self, path):
-        self.actor.load_weights(path + 'actor.h5')
-        self.critic.load_weights(path + 'critic.h5')
+    # def load_weights(self, path):
+    #     self.actor.load_weights(path + 'actor.h5')
+    #     self.critic.load_weights(path + 'critic.h5')
         
     def train(self, MAX_EPISODE_NUM):
         
-        random.seed(self.SEED)
-        tf.random.set_seed(self.SEED)
-        
+        # random.seed(self.SEED)
+        # tf.random.set_seed(self.SEED)
+
         self.update_target_network(1.0)
-        
+
         for ep in range(MAX_EPISODE_NUM):
-
-            # 에피소드 초기화
-            time, episode_reward, done = 0, 0, False
-            # 환경 초기화 및 초기 상태 관측
-            state = self.env.reset()
-            
-            while not done:
+        
+            if (ep > 1000) and (sum(self.save_epi_reward[-100:])/100 > 300.0):
+                # 에피소드 초기화
+                time, episode_reward, done = 0, 0, False
+                # 환경 초기화 및 초기 상태 관측
+                state = self.env.reset()
                 
-                action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
-                action = action.numpy()[0]
-                noise = self.gaussian_noise()
-                # 행동 범위 클리핑
-                action = np.clip(action + self.DELTA * (self.DELTA_DECAYING_RATE)**ep * noise, -self.action_bound, self.action_bound)
-                # 다음 상태, 보상 관측
-                next_state, reward, done, _ = self.env.step(action)
-                # 학습용 보상 설정
-                train_reward = reward * 1.0
-                # 리플레이 버퍼에 저장
-                self.buffer.add_buffer(state, action, train_reward, next_state, done)
-
-                if self.buffer.buffer_count() > 1000:
+                while not done:
                     
-                    states, actions, rewards, next_states, _ = self.buffer.sample_batch(self.BATCH_SIZE)
-                    states = tf.cast(states, dtype=tf.float32)
-                    next_states = tf.cast(next_states, dtype=tf.float32)
-                    # dones = tf.cast(dones, tf.float32)
-
-                    self.critic_learn(states, actions, rewards, next_states)
-                    self.actor_learn(states)
-                
-                    self.update_target_network(self.TAU)
+                    action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
+                    action = action.numpy()[0]
+                    noise = self.gaussian_noise()
+                    # 행동 범위 클리핑
+                    action = np.clip(action, -self.action_bound, self.action_bound)
+                    # 다음 상태, 보상 관측
+                    next_state, reward, done, _ = self.env.step(action)
+                    # 학습용 보상 설정
+                    state = next_state
+                    episode_reward += reward
+                    time += 1
                     
-                state = next_state
-                episode_reward += reward
-                time += 1
+                self.save_epi_reward.append(round(episode_reward, 2))
+                self.save_train_step.append(time)
+
+                wandb.log({
+                    "Episode reward": episode_reward,
+                    "Episode time": time,
+                    "Moving average reward": sum(self.save_epi_reward[-100:])/len(self.save_epi_reward[-100:])
+                    })
+            else:
+                # 에피소드 초기화
+                time, episode_reward, done = 0, 0, False
+                # 환경 초기화 및 초기 상태 관측
+                state = self.env.reset()
                 
-            print('Episode: ', ep+1, 'Time: ', time, 'Reward: ', episode_reward)
-                
-            self.save_epi_reward.append(round(episode_reward, 2))
-            
+                while not done:
+                    
+                    action = self.actor(tf.convert_to_tensor([state], dtype=tf.float32))
+                    action = action.numpy()[0]
+                    noise = self.gaussian_noise()
+                    # 행동 범위 클리핑
+                    action = np.clip(action + self.DELTA * (self.DELTA_DECAYING_RATE)**ep * noise, -self.action_bound, self.action_bound)
+                    # 다음 상태, 보상 관측
+                    next_state, reward, done, _ = self.env.step(action)
+                    # 학습용 보상 설정
+                    train_reward = reward * args.rs
+                    # 리플레이 버퍼에 저장
+                    self.buffer.add_buffer(state, action, train_reward, next_state, done)
+
+                    if self.buffer.buffer_count() > 1000:
+                        
+                        states, actions, rewards, next_states, _ = self.buffer.sample_batch(self.BATCH_SIZE)
+                        states = tf.cast(states, dtype=tf.float32)
+                        next_states = tf.cast(next_states, dtype=tf.float32)
+                        
+                        self.critic_learn(states, actions, rewards, next_states)
+                        self.actor_learn(states)
+                    
+                        self.update_target_network(self.TAU)
+
+                    state = next_state
+                    episode_reward += reward
+                    time += 1
+                    
+                self.save_epi_reward.append(round(episode_reward, 2))
+                self.save_train_step.append(time)
+
     def plot_result(self):
         plt.style.use(['default'])
         plt.plot(self.save_epi_reward)
         plt.show()
-            
-env = gym.make("BipedalWalker-v3")
-agent = SDPGagent(env, seed=10)
-MAX_EPISODE_NUM = 10000
-agent.train(MAX_EPISODE_NUM)
-agent.plot_result()
